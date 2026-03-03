@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Video Uploader</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body{
+  margin:0;
+  font-family:Arial;
+  background:#0f0f0f;
+  color:white;
+  transition:0.3s;
+}
+header{
+  padding:8px;
+  display:flex;
+  gap:6px;
+  background:#181818;
+  align-items:center;
+}
+.brand{
+  font-weight:bold;
+  font-size:18px;
+  margin-right:10px;
+}
+input{padding:6px;border-radius:6px;border:none}
+button{
+  padding:6px 10px;
+  border:none;
+  border-radius:6px;
+  cursor:pointer;
+  transition:0.2s;
+}
+button:hover{transform:scale(1.1)}
+main{display:flex;height:calc(100vh - 60px)}
+aside{
+  width:260px;
+  background:#161616;
+  padding:8px;
+  overflow-y:auto;
+}
+.video-card{
+  background:#222;
+  padding:6px;
+  margin-bottom:6px;
+  border-radius:6px;
+  cursor:pointer;
+  transition:0.3s;
+}
+.video-card:hover{
+  transform:translateX(5px);
+  background:#333;
+}
+section{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+}
+.player-area{
+  flex:1;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  background:black;
+}
+video{
+  width:80%;
+  max-height:80%;
+  border-radius:8px;
+  animation:fadeIn 0.4s ease;
+}
+@keyframes fadeIn{
+  from{opacity:0;transform:scale(0.95)}
+  to{opacity:1;transform:scale(1)}
+}
+.info{padding:10px}
+.comment-box{display:flex;gap:5px}
+.comment-list{
+  max-height:100px;
+  overflow-y:auto;
+  font-size:14px;
+}
+.recommend{
+  margin-top:6px;
+  font-size:13px;
+  opacity:0.8;
+}
+</style>
+</head>
+<body>
+
+<header>
+<div class="brand">🎬 Video Uploader</div>
+<input id="username" placeholder="Username">
+<button onclick="login()">Login</button>
+<input id="titleInput" placeholder="Video Title">
+<input type="file" id="fileInput" accept="video/*">
+<button onclick="uploadVideo()">Upload</button>
+</header>
+
+<main>
+<aside id="videoList"></aside>
+
+<section>
+<div class="player-area">
+<video id="player" controls></video>
+</div>
+
+<div class="info">
+<div id="videoTitle"></div>
+<div id="stats"></div>
+<button onclick="likeVideo()">❤️ Like</button>
+<button onclick="subscribe()">⭐ Subscribe</button>
+
+<div class="comment-box">
+<input id="commentInput" placeholder="Comment">
+<button onclick="addComment()">Send</button>
+</div>
+<div class="comment-list" id="comments"></div>
+
+<div class="recommend" id="recommendBox"></div>
+</div>
+</section>
+</main>
+
+<script>
+let db;
+let currentUser = localStorage.getItem("user");
+let currentId = null;
+let subscriptions = JSON.parse(localStorage.getItem("subs")) || {};
+let watchHistory = JSON.parse(localStorage.getItem("history")) || [];
+
+const request = indexedDB.open("VideoUploaderDB",1);
+
+request.onupgradeneeded = e=>{
+  db = e.target.result;
+  db.createObjectStore("videos",{keyPath:"id",autoIncrement:true});
+};
+
+request.onsuccess = e=>{
+  db = e.target.result;
+  loadVideos();
+};
+
+function saveLocal(){
+  localStorage.setItem("subs",JSON.stringify(subscriptions));
+  localStorage.setItem("history",JSON.stringify(watchHistory));
+}
+
+function login(){
+  const name=document.getElementById("username").value;
+  if(name){
+    currentUser=name;
+    localStorage.setItem("user",name);
+    alert("Logged in as "+name);
+  }
+}
+
+function uploadVideo(){
+  if(!currentUser)return alert("Login first");
+
+  const file=document.getElementById("fileInput").files[0];
+  const title=document.getElementById("titleInput").value;
+  if(!file||!title)return;
+
+  const reader=new FileReader();
+  reader.onload=function(){
+    const tx=db.transaction(["videos"],"readwrite");
+    const store=tx.objectStore("videos");
+
+    store.add({
+      title,
+      data:reader.result,
+      uploader:currentUser,
+      views:0,
+      likes:0,
+      comments:[]
+    });
+
+    tx.oncomplete=()=>loadVideos();
+  };
+  reader.readAsDataURL(file);
+}
+
+function loadVideos(){
+  const list=document.getElementById("videoList");
+  list.innerHTML="";
+  const tx=db.transaction(["videos"],"readonly");
+  const store=tx.objectStore("videos");
+
+  let all=[];
+  store.openCursor().onsuccess=e=>{
+    const cursor=e.target.result;
+    if(cursor){
+      all.push({...cursor.value,id:cursor.key});
+      cursor.continue();
+    }else{
+      all.sort((a,b)=>(b.views+b.likes*2)-(a.views+a.likes*2));
+      all.forEach(video=>{
+        const div=document.createElement("div");
+        div.className="video-card";
+        div.innerHTML=video.title+"<br>🔥 "+(video.views+video.likes*2);
+        div.onclick=()=>playVideo(video.id);
+        list.appendChild(div);
+      });
+    }
+  };
+}
+
+function playVideo(id){
+  const tx=db.transaction(["videos"],"readwrite");
+  const store=tx.objectStore("videos");
+  store.get(id).onsuccess=e=>{
+    const v=e.target.result;
+    currentId=id;
+    v.views++;
+    store.put(v);
+
+    document.getElementById("player").src=v.data;
+    document.getElementById("videoTitle").innerText=
+      v.title+" - "+v.uploader;
+
+    document.getElementById("stats").innerText=
+      "👁 "+v.views+" ❤️ "+v.likes;
+
+    loadComments(v);
+    recommend(v);
+    watchHistory.push(v.uploader);
+    saveLocal();
+  };
+}
+
+function likeVideo(){
+  if(currentId===null)return;
+  const tx=db.transaction(["videos"],"readwrite");
+  const store=tx.objectStore("videos");
+  store.get(currentId).onsuccess=e=>{
+    const v=e.target.result;
+    v.likes++;
+    store.put(v);
+    document.getElementById("stats").innerText=
+      "👁 "+v.views+" ❤️ "+v.likes;
+    loadVideos();
+  };
+}
+
+function subscribe(){
+  if(!currentUser||currentId===null)return;
+  const tx=db.transaction(["videos"],"readonly");
+  tx.objectStore("videos").get(currentId).onsuccess=e=>{
+    const uploader=e.target.result.uploader;
+    subscriptions[currentUser]=subscriptions[currentUser]||[];
+    if(!subscriptions[currentUser].includes(uploader)){
+      subscriptions[currentUser].push(uploader);
+      alert("Subscribed to "+uploader);
+      saveLocal();
+    }
+  };
+}
+
+function addComment(){
+  if(currentId===null||!currentUser)return;
+  const text=document.getElementById("commentInput").value;
+  if(!text)return;
+
+  const tx=db.transaction(["videos"],"readwrite");
+  const store=tx.objectStore("videos");
+  store.get(currentId).onsuccess=e=>{
+    const v=e.target.result;
+    v.comments.push({user:currentUser,text});
+    store.put(v);
+    loadComments(v);
+    document.getElementById("commentInput").value="";
+  };
+}
+
+function loadComments(v){
+  const box=document.getElementById("comments");
+  box.innerHTML="";
+  v.comments.forEach(c=>{
+    const div=document.createElement("div");
+    div.innerText=c.user+": "+c.text;
+    box.appendChild(div);
+  });
+}
+
+function recommend(current){
+  const box=document.getElementById("recommendBox");
+  const favUploader=watchHistory[watchHistory.length-1];
+  if(favUploader){
+    box.innerText="Recommended: More from "+favUploader;
+  }else{
+    box.innerText="";
+  }
+}
+</script>
+
+</body>
+</html>
